@@ -1,0 +1,34 @@
+# 環境変数
+.env
+.env.local
+*.env
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ログ
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 取得データ（fetch 出力）
+data/*.jsonl
+
+# 学習済みモデル（Phase 3）
+models/*.pkl
+models/*.lgb

@@ -1,0 +1,25 @@
+# Keiba Ledger Phase 1 — Python依存関係
+# 設計書 2-7 に基づく
+
+# DB
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
+
+# JV-Link (Windows)
+pywin32>=306
+
+# データ処理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 環境変数
+python-dotenv>=1.0.0
+
+# Supabase同期
+supabase>=2.0.0
+
+# ログ
+loguru>=0.7.0
+
+# 仕様書変換（scripts/tools/excel_to_md.py）
+openpyxl>=3.0.0
