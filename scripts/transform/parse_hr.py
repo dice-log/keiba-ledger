@@ -1,15 +1,26 @@
 """
 HR（払戻）レコードのパーサー
-JV-Data仕様書 ４．払戻 に基づく
+JV-Data仕様書 ４．払戻 に基づく（位置は1始まりのバイト位置、719 byte）
+
+※JV-Dataはバイト位置指定のため、cp932でバイト列に変換してからパースする。
 """
 
 
-def _sub(s: str, start: int, length: int) -> str:
-    return s[start - 1 : start - 1 + length].strip()
+def _to_bytes(raw: str) -> bytes:
+    """Unicode文字列をcp932バイト列に変換（JV-Data仕様）"""
+    return raw.encode("cp932", errors="replace")
 
 
-def _int_or_none(s: str):
-    if not s or not s.strip() or s.strip() in ("sp",):
+def _sub_bytes(b: bytes, start: int, length: int) -> str:
+    """1始まりのバイト位置から length バイト切り出し、cp932でデコード"""
+    if not b or start < 1:
+        return ""
+    chunk = b[start - 1 : start - 1 + length]
+    return chunk.decode("cp932", errors="replace").strip()
+
+
+def _int_or_none(s: str) -> int | None:
+    if not s or not s.strip():
         return None
     try:
         return int(s)
@@ -17,80 +28,99 @@ def _int_or_none(s: str):
         return None
 
 
-def parse_hr(raw: str) -> list[dict]:
+# 馬券種別と bet_type の対応
+BET_TYPES = [
+    ("win", 103, 3, 13, 2, 9, 2),       # 単勝: 馬番(2) 払戻(9) 人気(2)
+    ("place", 142, 5, 13, 2, 9, 2),     # 複勝
+    ("bracket", 207, 3, 13, 2, 9, 2),   # 枠連: 組番(2)
+    ("quinella", 246, 3, 16, 4, 9, 3),  # 馬連: 組番(4) ex "0307"
+    ("wide", 294, 7, 16, 4, 9, 3),      # ワイド
+    ("exacta", 454, 6, 16, 4, 9, 3),    # 馬単
+    ("trio", 550, 3, 18, 6, 9, 3),      # 3連複: 組番(6)
+    ("trifecta", 604, 6, 19, 6, 9, 4),  # 3連単: 組番(6) 人気(4)
+]
+
+
+def _fmt_combo(bet_type: str, combo_raw: str) -> str:
+    """組番を analytics.payouts 用の combination 形式に変換"""
+    c = (combo_raw or "").strip()
+    if not c or c in ("00", "0000", "000000"):
+        return ""
+    # 枠連: "35" -> "3-5"
+    if bet_type == "bracket" and len(c) == 2:
+        return f"{c[0]}-{c[1]}" if c[0] != "0" else c
+    # 馬連・ワイド: "0307" -> "3-7"
+    if bet_type in ("quinella", "wide") and len(c) == 4:
+        a, b = int(c[:2]), int(c[2:])
+        return f"{min(a,b)}-{max(a,b)}" if a and b else c
+    # 馬単: "0703" -> "7-3" (着順のまま)
+    if bet_type == "exacta" and len(c) == 4:
+        a, b = int(c[:2]), int(c[2:])
+        return f"{a}-{b}" if a and b else c
+    # 3連複: "030712" -> "3-7-12" (昇順)
+    if bet_type == "trio" and len(c) == 6:
+        a, b, d = int(c[:2]), int(c[2:4]), int(c[4:6])
+        if a and b and d:
+            return "-".join(str(x) for x in sorted([a, b, d]))
+        return c
+    # 3連単: "070312" -> "7-3-12" (着順のまま)
+    if bet_type == "trifecta" and len(c) == 6:
+        a, b, d = int(c[:2]), int(c[2:4]), int(c[4:6])
+        return f"{a}-{b}-{d}" if a and b and d else c
+    # 単勝・複勝: "07" -> "7"
+    if bet_type in ("win", "place") and len(c) == 2:
+        return str(int(c)) if c != "00" else ""
+    return c
+
+
+def parse_hr(raw: str) -> list[dict] | None:
     """
-    HRレコードをパースして analytics.payouts 用の辞書のリストを返す。
-    単勝・複勝・枠連・馬連・ワイド・馬単・3連複・3連単
+    HRレコードをパースして analytics.payouts 用の辞書リストを返す。
+    1レコードで複数馬券種の払戻があるため、リストで返す。
     """
-    if len(raw) < 720:
-        return []
-    result = []
     try:
-        year = _sub(raw, 12, 4)
-        mmdd = _sub(raw, 16, 4)
-        venue_code = _sub(raw, 20, 2)
-        kai = _sub(raw, 22, 2)
-        nichi = _sub(raw, 24, 2)
-        race_no = _sub(raw, 26, 2)
-        race_id = f"{year}{mmdd}{venue_code}{kai}{nichi}{race_no}"
-        # 単勝払戻 103, 3×13
-        for i in range(3):
-            base = 103 + i * 13
-            uma = _sub(raw, base + 1, 2)
-            payout = _int_or_none(_sub(raw, base + 3, 9))
-            pop = _int_or_none(_sub(raw, base + 12, 2))
-            if uma and uma != "00" and payout is not None:
-                result.append({"race_id": race_id, "bet_type": "WIN", "combination": uma, "payout": payout, "popularity": pop})
-        # 複勝 142, 5×13
-        for i in range(5):
-            base = 142 + i * 13
-            uma = _sub(raw, base + 1, 2)
-            payout = _int_or_none(_sub(raw, base + 3, 9))
-            pop = _int_or_none(_sub(raw, base + 12, 2))
-            if uma and uma != "00" and payout is not None:
-                result.append({"race_id": race_id, "bet_type": "PLACE", "combination": uma, "payout": payout, "popularity": pop})
-        # 枠連 207, 3×13
-        for i in range(3):
-            base = 207 + i * 13
-            kumi = _sub(raw, base + 1, 2)
-            payout = _int_or_none(_sub(raw, base + 3, 9))
-            pop = _int_or_none(_sub(raw, base + 12, 2))
-            if kumi and kumi != "00" and payout is not None:
-                result.append({"race_id": race_id, "bet_type": "FRAME_QUINELLA", "combination": kumi, "payout": payout, "popularity": pop})
-        # 馬連 246, 3×16
-        for i in range(3):
-            base = 246 + i * 16
-            kumi = _sub(raw, base + 1, 4)
-            payout = _int_or_none(_sub(raw, base + 5, 9))
-            pop = _int_or_none(_sub(raw, base + 14, 3))
-            if kumi and kumi != "0000" and payout is not None:
-                a, b = kumi[:2], kumi[2:]
-                result.append({"race_id": race_id, "bet_type": "QUINELLA", "combination": f"{a}-{b}" if a != b else a, "payout": payout, "popularity": pop})
-        # 馬単 454, 6×16
-        for i in range(6):
-            base = 454 + i * 16
-            kumi = _sub(raw, base + 1, 4)
-            payout = _int_or_none(_sub(raw, base + 5, 9))
-            pop = _int_or_none(_sub(raw, base + 14, 3))
-            if kumi and kumi != "0000" and payout is not None:
-                result.append({"race_id": race_id, "bet_type": "EXACTA", "combination": f"{kumi[:2]}-{kumi[2:]}", "payout": payout, "popularity": pop})
-        # 3連複 550, 3×18
-        for i in range(3):
-            base = 550 + i * 18
-            kumi = _sub(raw, base + 1, 6)
-            payout = _int_or_none(_sub(raw, base + 7, 9))
-            pop = _int_or_none(_sub(raw, base + 16, 3))
-            if kumi and kumi != "000000" and payout is not None:
-                nums = [kumi[j:j+2] for j in range(0, 6, 2)]
-                result.append({"race_id": race_id, "bet_type": "TRIO", "combination": "-".join(sorted(nums)), "payout": payout, "popularity": pop})
-        # 3連単 604, 6×19
-        for i in range(6):
-            base = 604 + i * 19
-            kumi = _sub(raw, base + 1, 6)
-            payout = _int_or_none(_sub(raw, base + 7, 9))
-            pop = _int_or_none(_sub(raw, base + 16, 4))
-            if kumi and kumi != "000000" and payout is not None:
-                result.append({"race_id": race_id, "bet_type": "TRIFECTA", "combination": f"{kumi[:2]}-{kumi[2:4]}-{kumi[4:6]}", "payout": payout, "popularity": pop})
+        b = _to_bytes(raw)
     except Exception:
-        pass
-    return result
+        return None
+    if len(b) < 604:
+        return None
+
+    year = _sub_bytes(b, 12, 4)
+    mmdd = _sub_bytes(b, 16, 4)
+    venue_code = _sub_bytes(b, 20, 2)
+    kai = _sub_bytes(b, 22, 2)
+    nichi = _sub_bytes(b, 24, 2)
+    race_no = _sub_bytes(b, 26, 2)
+    if not (year and mmdd and venue_code and race_no):
+        return None
+
+    race_id = f"{year}{mmdd}{venue_code}{kai}{nichi}{race_no}"
+    result = []
+
+    for bet_type, start, repeat, rec_len, combo_len, payout_len, pop_len in BET_TYPES:
+        combo_offs = combo_len
+        payout_offs = combo_len + payout_len
+        pop_offs = combo_len + payout_len + pop_len
+
+        for i in range(repeat):
+            pos = start + i * rec_len
+            combo_raw = _sub_bytes(b, pos, combo_len)
+            payout_str = _sub_bytes(b, pos + combo_offs, payout_len)
+            pop_str = _sub_bytes(b, pos + payout_offs, pop_len)
+
+            payout = _int_or_none(payout_str)
+            if payout is None or payout <= 0:
+                continue
+            combination = _fmt_combo(bet_type, combo_raw)
+            if not combination:
+                continue
+
+            result.append({
+                "race_id": race_id,
+                "bet_type": bet_type,
+                "combination": combination,
+                "payout": payout,
+                "popularity": _int_or_none(pop_str),
+            })
+
+    return result if result else None

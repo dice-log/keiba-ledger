@@ -10,6 +10,7 @@
   python scripts/fetch/initial_fetch.py --from 2015-01-01
   python scripts/fetch/initial_fetch.py --from 2023-01-01 --no-odds
   python scripts/fetch/initial_fetch.py --from 2024-01-01 --limit 100
+  python scripts/fetch/initial_fetch.py --diff-only   # UM/KS/CH マスタのみ取得
 """
 
 import argparse
@@ -27,6 +28,9 @@ def main():
     parser.add_argument("--no-odds", action="store_true", help="オッズレコードを除外")
     parser.add_argument("--limit", type=int, default=0, help="取得件数制限（0=無制限）")
     parser.add_argument("--skip-load", action="store_true", help="取得のみ実施、DB投入はスキップ")
+    parser.add_argument("--diff-only", action="store_true", help="DIFF（UM/KS/CH マスタ）のみ取得")
+    parser.add_argument("--um-ks-only", action="store_true", help="UM/KS のみ取得")
+    parser.add_argument("--setup", action="store_true", help="DIFN をセットアップ（option=3）で取得")
     args = parser.parse_args()
 
     (ROOT / "data").mkdir(exist_ok=True)
@@ -43,8 +47,14 @@ def main():
         cmd_fetch.append("--no-odds")
     if args.limit:
         cmd_fetch.extend(["--limit", str(args.limit)])
+    if args.diff_only:
+        cmd_fetch.append("--diff-only")
+    if args.um_ks_only:
+        cmd_fetch.append("--um-ks-only")
+    if args.setup:
+        cmd_fetch.append("--setup")
 
-    print("[1/2] JV-Link 取得 (32bit)...")
+    print("[1/2] JV-Link 取得 (32bit)...", flush=True)
     r1 = subprocess.run(cmd_fetch, cwd=str(ROOT))
     if r1.returncode != 0:
         print("[NG] fetch_to_file 失敗")
@@ -55,7 +65,7 @@ def main():
         return
 
     # Step 2: 64bit でファイル → DB
-    print("[2/2] DB 投入...")
+    print("[2/2] DB 投入...", flush=True)
     r2 = subprocess.run(
         [sys.executable, str(FETCH_DIR / "load_to_db.py"), str(out_file)],
         cwd=str(ROOT),

@@ -25,11 +25,18 @@ except ImportError:
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(ROOT / ".env", encoding="utf-8")
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        try:
+            load_dotenv(env_path, encoding="utf-8")
+        except UnicodeDecodeError:
+            load_dotenv(env_path, encoding="cp932")  # 日本語Windows
 except ImportError:
     pass
 except Exception:
-    pass  # 読み込み失敗時
+    pass
+
+os.environ.setdefault("PGCLIENTENCODING", "UTF8")  # 日本語Windows: サーバー通信をUTF-8に
 
 
 def get_db_config():
@@ -87,7 +94,7 @@ def main():
         return
 
     print("=" * 50)
-    print("Keiba Ledger — DB初期化")
+    print("Keiba Ledger - DB初期化")
     print("=" * 50)
 
     config = get_db_config()

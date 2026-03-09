@@ -4,3 +4,7 @@ dist/
 build/
 .git/
 *.log
+data/
+*.csv
+*.json
+*.db
