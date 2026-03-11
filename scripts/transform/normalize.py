@@ -4,7 +4,7 @@ raw.jvdata → analytics 正規化
 
 processed=FALSE のレコードをパースして analytics テーブルに挿入し、processed=TRUE に更新。
 
-処理対象: RA→races, SE→race_entries, HR→payouts, UM→horses, KS→jockeys
+処理対象: RA→races, SE→race_entries, HR→payouts, UM→horses, KS→jockeys, CH→trainers, JG→horse_exclusions
 """
 
 import argparse
@@ -30,6 +30,8 @@ from parse_se import parse_se
 from parse_hr import parse_hr
 from parse_um import parse_um
 from parse_ks import parse_ks
+from parse_ch import parse_ch
+from parse_jg import parse_jg
 
 
 def get_db_config():
@@ -47,6 +49,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="DBに書き込まずテスト")
     parser.add_argument("--limit", type=int, default=0, help="処理件数制限")
     parser.add_argument("--um-ks-only", action="store_true", help="UM/KS のみ正規化")
+    parser.add_argument("--ch-jg-only", action="store_true", help="CH/JG のみ正規化")
     args = parser.parse_args()
 
     (ROOT / "logs").mkdir(exist_ok=True)
@@ -59,7 +62,7 @@ def main():
     cur.execute(
         """SELECT id, record_type, raw_text FROM raw.jvdata WHERE processed = FALSE
            ORDER BY
-             CASE record_type WHEN 'RA' THEN 1 WHEN 'SE' THEN 2 WHEN 'HR' THEN 3 WHEN 'UM' THEN 4 WHEN 'KS' THEN 5 ELSE 6 END,
+             CASE record_type WHEN 'RA' THEN 1 WHEN 'SE' THEN 2 WHEN 'HR' THEN 3 WHEN 'UM' THEN 4 WHEN 'KS' THEN 5 WHEN 'CH' THEN 6 WHEN 'JG' THEN 7 ELSE 8 END,
              CASE WHEN record_type = 'RA' AND SUBSTRING(COALESCE(raw_text,'') FROM 3 FOR 1) IN ('5','6','7') THEN 1 ELSE 0 END,
              CASE WHEN record_type = 'SE' AND SUBSTRING(COALESCE(raw_text,'') FROM 3 FOR 1) IN ('5','6','7') THEN 1 ELSE 0 END,
              id"""
@@ -67,13 +70,15 @@ def main():
     rows = cur.fetchall()
     if args.um_ks_only:
         rows = [r for r in rows if r[1] in ("UM", "KS")]
+    if args.ch_jg_only:
+        rows = [r for r in rows if r[1] in ("CH", "JG")]
     if args.limit:
         rows = rows[: args.limit]
 
     cur.execute("SELECT race_id FROM analytics.races")
     known_race_ids = {r[0] for r in cur.fetchall()}
 
-    stats = {"RA": 0, "SE": 0, "HR": 0, "UM": 0, "KS": 0, "skip": 0, "err": 0}
+    stats = {"RA": 0, "SE": 0, "HR": 0, "UM": 0, "KS": 0, "CH": 0, "JG": 0, "skip": 0, "err": 0}
     processed_ids = []
 
     for row_id, record_type, raw_text in rows:
@@ -235,6 +240,55 @@ def main():
                             d,
                         )
                     stats["KS"] += 1
+                    processed_ids.append(row_id)
+                else:
+                    stats["skip"] += 1
+
+            elif record_type == "CH":
+                d = parse_ch(raw_text)
+                if d and d.get("trainer_id"):
+                    if not args.dry_run:
+                        cur.execute(
+                            """
+                            INSERT INTO analytics.trainers (
+                                trainer_id, name, name_kana, name_abbr, belong_to, birth_date, retired
+                            ) VALUES (
+                                %(trainer_id)s, %(name)s, %(name_kana)s, %(name_abbr)s, %(belong_to)s,
+                                %(birth_date)s, %(retired)s
+                            )
+                            ON CONFLICT (trainer_id) DO UPDATE SET
+                                name = EXCLUDED.name,
+                                name_kana = EXCLUDED.name_kana,
+                                name_abbr = EXCLUDED.name_abbr,
+                                belong_to = EXCLUDED.belong_to,
+                                birth_date = EXCLUDED.birth_date,
+                                retired = EXCLUDED.retired,
+                                updated_at = NOW()
+                            """,
+                            d,
+                        )
+                    stats["CH"] += 1
+                    processed_ids.append(row_id)
+                else:
+                    stats["skip"] += 1
+
+            elif record_type == "JG":
+                d = parse_jg(raw_text)
+                if d and d.get("race_id") and d.get("horse_id") and d["race_id"] in known_race_ids:
+                    if not args.dry_run:
+                        cur.execute(
+                            """
+                            INSERT INTO analytics.horse_exclusions (
+                                race_id, horse_id, horse_name, exclusion_type, lottery_status
+                            ) VALUES (%(race_id)s, %(horse_id)s, %(horse_name)s, %(exclusion_type)s, %(lottery_status)s)
+                            ON CONFLICT (race_id, horse_id) DO UPDATE SET
+                                horse_name = EXCLUDED.horse_name,
+                                exclusion_type = EXCLUDED.exclusion_type,
+                                lottery_status = EXCLUDED.lottery_status
+                            """,
+                            d,
+                        )
+                    stats["JG"] += 1
                     processed_ids.append(row_id)
                 else:
                     stats["skip"] += 1

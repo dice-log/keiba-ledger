@@ -2,11 +2,13 @@
 JV-Link 取得 → ファイル出力（32bit Python 専用・psycopg2 不要）
 
 実行: py -3.11-32 scripts/fetch/fetch_to_file.py --from 2024-01-01 --no-odds --limit 100
+      py -3.11-32 scripts/fetch/fetch_to_file.py --ra-se-hr-only  # races/entries/payouts のみ全件
 """
 
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from jvlink_client import JVLinkClient, TARGET_RECORD_TYPES
 
 RECORD_TYPES_NO_ODDS = frozenset(["RA", "SE", "HR", "UM", "KS", "CH", "WH", "WE", "JG"])
+# races / race_entries / payouts のみ（DIFN はスキップ）
+RECORD_TYPES_RA_SE_HR = frozenset(["RA", "SE", "HR"])
 # DIFF（蓄積情報）に含まれるマスタ。RACEには含まれない。
 RECORD_TYPES_DIFF = frozenset(["UM", "KS", "CH"])
 RECORD_TYPES_UM_KS = frozenset(["UM", "KS"])
@@ -40,7 +44,7 @@ def extract_source_date(record_type: str, raw_text: str) -> str | None:
                 y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
                 if _valid(y, m, d):
                     return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
-        if record_type in ("UM", "KS", "CH") and len(raw_text) >= 12:
+        if record_type in ("UM", "KS", "CH", "JG") and len(raw_text) >= 12:
             s = raw_text[3:11]  # データ作成年月日 位置4-11
             if s.isdigit():
                 y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
@@ -57,6 +61,19 @@ def extract_source_date(record_type: str, raw_text: str) -> str | None:
     return None
 
 
+def _progress_str(count: int, total: int | None, elapsed: float, type_counts: dict) -> str:
+    """進捗表示用の文字列を生成
+    ※total(dl_count)はファイル数でありレコード数と一致しないため、%は表示しない
+    """
+    parts = [f"{count:,} 件"]
+    if elapsed >= 1:
+        parts.append(f"[経過 {elapsed:.0f}秒]")
+    breakdown = " ".join(f"{t}:{c:,}" for t, c in sorted(type_counts.items()))
+    if breakdown:
+        parts.append(f" ({breakdown})")
+    return " ".join(parts)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -64,6 +81,7 @@ def main():
     parser.add_argument("--no-odds", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--output", type=str, default="", help="Output file path")
+    parser.add_argument("--ra-se-hr-only", action="store_true", help="RA/SE/HR のみ取得（races/entries/payouts用・DIFNスキップ）")
     parser.add_argument("--diff-only", action="store_true", help="DIFF（UM/KS/CH）のみ取得")
     parser.add_argument("--um-ks-only", action="store_true", help="UM/KS のみ取得（DIFF の UM,KS のみ）")
     parser.add_argument("--setup", action="store_true", help="DIFN を option=3（セットアップ）で取得")
@@ -73,7 +91,10 @@ def main():
 
     from_date = args.from_date
     from_time = from_date.replace("-", "") + "000000"
-    target_types = RECORD_TYPES_NO_ODDS if args.no_odds else TARGET_RECORD_TYPES
+    if args.ra_se_hr_only:
+        target_types = RECORD_TYPES_RA_SE_HR
+    else:
+        target_types = RECORD_TYPES_NO_ODDS if args.no_odds else TARGET_RECORD_TYPES
 
     (ROOT / "data").mkdir(exist_ok=True)
     out_path = args.output
@@ -94,18 +115,21 @@ def main():
         with open(out_path, "w", encoding="utf-8") as _:
             pass
     if not args.diff_only:
-        rc, dl_count, _ = client.open("RACE", from_time, option=1)
+        race_option = 3 if args.ra_se_hr_only else 1  # 3=セットアップ（全件）, 1=通常
+        rc, dl_count, _ = client.open("RACE", from_time, option=race_option)
         if rc < 0:
             print(f"[NG] JVOpen(RACE) failed: rc={rc}")
             sys.exit(1)
 
+        label = "RA/SE/HR" if args.ra_se_hr_only else "RACE"
         if dl_count > 0:
-            print(f"[RACE] 取得開始 (予定: {dl_count:,} 件)...")
+            print(f"[{label}] 取得開始 (予定: {dl_count:,} 件)...", flush=True)
         else:
-            print("[RACE] 取得開始...")
+            print(f"[{label}] 取得開始...", flush=True)
 
-        PROGRESS_INTERVAL = 5000
+        PROGRESS_INTERVAL = 1000
         type_counts: dict[str, int] = {}
+        t0 = time.time()
         with open(out_path, write_mode, encoding="utf-8") as f:
             for record_type, raw_text in client.read(target_types=target_types):
                 source_date = extract_source_date(record_type, raw_text)
@@ -118,17 +142,19 @@ def main():
                 total += 1
                 type_counts[record_type] = type_counts.get(record_type, 0) + 1
                 if total % PROGRESS_INTERVAL == 0:
-                    breakdown = " ".join(f"{t}:{c:,}" for t, c in sorted(type_counts.items()))
-                    print(f"  RACE: {total:,} 件 ({breakdown})", flush=True)
+                    elapsed = time.time() - t0
+                    msg = _progress_str(total, dl_count if dl_count > 0 else None, elapsed, type_counts)
+                    print(f"  {label}: {msg}", flush=True)
                 if args.limit and total >= args.limit:
                     break
 
-        print(f"  RACE 完了: {total:,} 件", flush=True)
+        elapsed = time.time() - t0
+        print(f"  {label} 完了: {total:,} 件 [経過 {elapsed:.0f}秒]", flush=True)
         client.close()
         write_mode = "a"  # DIFF は追記
 
-    # DIFF（蓄積情報）で UM/KS/CH を取得（--no-odds または --diff-only 時）
-    if args.no_odds or args.diff_only:
+    # DIFF（蓄積情報）で UM/KS/CH を取得（--no-odds または --diff-only 時）。--ra-se-hr-only の場合はスキップ
+    if (args.no_odds or args.diff_only) and not args.ra_se_hr_only:
         if not args.diff_only:
             # RACE 後に close 済みのため再 init
             if not client.init():
@@ -141,12 +167,14 @@ def main():
         if rc >= 0:
             diff_count = 0
             diff_types = RECORD_TYPES_UM_KS if args.um_ks_only else RECORD_TYPES_DIFF
-            label = "UM/KS" if args.um_ks_only else "UM/KS/CH"
+            label = f"DIFN({('UM/KS' if args.um_ks_only else 'UM/KS/CH')})"
             if dl_count > 0:
-                print(f"[DIFN] 取得開始 (予定: {dl_count:,} 件, {label})...")
+                print(f"[{label}] 取得開始 (予定: {dl_count:,} 件)...", flush=True)
             else:
-                print(f"[DIFN] 取得開始 ({label})...")
-            PROGRESS_INTERVAL = 20000
+                print(f"[{label}] 取得開始...", flush=True)
+            PROGRESS_INTERVAL = 10000
+            type_counts: dict[str, int] = {}
+            t0 = time.time()
             with open(out_path, write_mode, encoding="utf-8") as f:
                 for record_type, raw_text in client.read(target_types=diff_types):
                     source_date = extract_source_date(record_type, raw_text)
@@ -157,10 +185,14 @@ def main():
                     }
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
                     diff_count += 1
+                    type_counts[record_type] = type_counts.get(record_type, 0) + 1
                     if diff_count % PROGRESS_INTERVAL == 0:
-                        print(f"  DIFN: {diff_count:,} 件", flush=True)
+                        elapsed = time.time() - t0
+                        msg = _progress_str(diff_count, dl_count if dl_count > 0 else None, elapsed, type_counts)
+                        print(f"  {label}: {msg}", flush=True)
             total += diff_count
-            print(f"  DIFN 完了: {diff_count:,} 件 ({label})", flush=True)
+            elapsed = time.time() - t0
+            print(f"  {label} 完了: {diff_count:,} 件 [経過 {elapsed:.0f}秒]", flush=True)
         else:
             print(f"[WARN] JVOpen(DIFN) failed: rc={rc} (UM/KS/CH は取得できません)")
         client.close()

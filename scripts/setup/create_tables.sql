@@ -149,3 +149,28 @@ CREATE TABLE analytics.payouts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_payouts_race ON analytics.payouts(race_id);
+
+CREATE TABLE analytics.trainers (
+    trainer_id       TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    name_kana        TEXT,
+    name_abbr        TEXT,
+    belong_to        TEXT,
+    birth_date       DATE,
+    retired          BOOLEAN DEFAULT FALSE,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE analytics.horse_exclusions (
+    id               BIGSERIAL PRIMARY KEY,
+    race_id          TEXT NOT NULL,
+    horse_id         TEXT NOT NULL,
+    horse_name       TEXT,
+    exclusion_type   TEXT,
+    lottery_status   TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(race_id, horse_id)
+);
+CREATE INDEX IF NOT EXISTS idx_horse_exclusions_race ON analytics.horse_exclusions(race_id);
+CREATE INDEX IF NOT EXISTS idx_horse_exclusions_horse ON analytics.horse_exclusions(horse_id);
