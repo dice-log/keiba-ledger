@@ -1,6 +1,6 @@
 # Keiba Ledger データベーススキーマ一覧
 
-**最終更新**: create_tables.sql + migrate_dedup.sql に基づく
+**最終更新**: create_tables.sql + migrate_dedup.sql + migrate_trainers_exclusions.sql に基づく
 
 ---
 
@@ -12,7 +12,7 @@ JRAvan/JV-Link から取得した生データを保存するテーブル
 | カラム | 型 | 説明 |
 |--------|------|------|
 | id | BIGSERIAL PRIMARY KEY | 自動採番ID |
-| record_type | TEXT NOT NULL | レコード種別（'RA','SE','HR','O1','UM','KS'等） |
+| record_type | TEXT NOT NULL | レコード種別（'RA','SE','HR','O1','UM','KS','CH','JG'等） |
 | record_spec | TEXT | レコード仕様バージョン |
 | source_date | DATE | データの基準日 |
 | payload | JSONB NOT NULL | 生データをJSONで保存 |
@@ -141,6 +141,41 @@ JRAvan/JV-Link から取得した生データを保存するテーブル
 
 ---
 
+### analytics.trainers
+調教師マスタ（CH レコード由来）
+
+| カラム | 型 | 説明 |
+|--------|------|------|
+| trainer_id | TEXT PRIMARY KEY | 調教師ID |
+| name | TEXT NOT NULL | 調教師名 |
+| name_kana | TEXT | 調教師名カナ |
+| name_abbr | TEXT | 調教師名略称 |
+| belong_to | TEXT | 所属（'美浦','栗東'等） |
+| birth_date | DATE | 生年月日 |
+| retired | BOOLEAN | 抹消フラグ |
+| created_at | TIMESTAMPTZ | 作成日時 |
+| updated_at | TIMESTAMPTZ | 更新日時 |
+
+---
+
+### analytics.horse_exclusions
+競走馬除外情報（JG レコード由来・出走取消・競走除外等）
+
+| カラム | 型 | 説明 |
+|--------|------|------|
+| id | BIGSERIAL PRIMARY KEY | 自動採番ID |
+| race_id | TEXT NOT NULL | レースID |
+| horse_id | TEXT NOT NULL | 馬ID |
+| horse_name | TEXT | 馬名 |
+| exclusion_type | TEXT | 出走区分（'投票馬','締切除外','取消馬'等） |
+| lottery_status | TEXT | 除外状態（'非抽選馬','非当選馬'等） |
+| created_at | TIMESTAMPTZ | 作成日時 |
+
+**インデックス**: race_id, horse_id  
+**ユニーク制約**: (race_id, horse_id)
+
+---
+
 ### analytics.odds_final
 オッズ（最終オッズ）
 
@@ -211,11 +246,12 @@ JRAvan/JV-Link から取得した生データを保存するテーブル
 ## テーブル関連図
 
 ```
-raw.jvdata (RA→races, SE→race_entries, HR→payouts, UM→horses, KS→jockeys)
+raw.jvdata (RA→races, SE→race_entries, HR→payouts, UM→horses, KS→jockeys, CH→trainers, JG→horse_exclusions)
      │
      ▼
-analytics.races ◄─── analytics.race_entries (horse_id→horses, jockey_id→jockeys)
+analytics.races ◄─── analytics.race_entries (horse_id→horses, jockey_id→jockeys, trainer_id→trainers)
      │              analytics.payouts
+     │              analytics.horse_exclusions（出走取消・競走除外馬）
      │              analytics.odds_final
      └────────────── analytics.odds_timeseries
 ```

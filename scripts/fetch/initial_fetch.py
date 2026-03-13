@@ -7,9 +7,9 @@
 
 実行方法:
   python scripts/fetch/initial_fetch.py
+  python scripts/fetch/initial_fetch.py --ra-se-hr-only  # races/entries/payouts を全範囲取得
   python scripts/fetch/initial_fetch.py --from 2015-01-01
   python scripts/fetch/initial_fetch.py --from 2023-01-01 --no-odds
-  python scripts/fetch/initial_fetch.py --from 2024-01-01 --limit 100
   python scripts/fetch/initial_fetch.py --diff-only   # UM/KS/CH マスタのみ取得
 """
 
@@ -24,7 +24,8 @@ FETCH_DIR = Path(__file__).resolve().parent
 
 def main():
     parser = argparse.ArgumentParser(description="Keiba Ledger 初回データ取得")
-    parser.add_argument("--from", dest="from_date", default="2010-01-01", help="開始日 YYYY-MM-DD")
+    parser.add_argument("--from", dest="from_date", default=None, help="開始日 YYYY-MM-DD（--ra-se-hr-only時は未指定で1986-01-01）")
+    parser.add_argument("--ra-se-hr-only", action="store_true", help="RA/SE/HR のみ全範囲取得（races/entries/payouts用・取得可能な最早日から）")
     parser.add_argument("--no-odds", action="store_true", help="オッズレコードを除外")
     parser.add_argument("--limit", type=int, default=0, help="取得件数制限（0=無制限）")
     parser.add_argument("--skip-load", action="store_true", help="取得のみ実施、DB投入はスキップ")
@@ -33,6 +34,10 @@ def main():
     parser.add_argument("--setup", action="store_true", help="DIFN をセットアップ（option=3）で取得")
     args = parser.parse_args()
 
+    from_date = args.from_date
+    if from_date is None:
+        from_date = "1986-01-01" if args.ra_se_hr_only else "2010-01-01"
+
     (ROOT / "data").mkdir(exist_ok=True)
     out_file = ROOT / "data" / "fetch_latest.jsonl"
 
@@ -40,10 +45,12 @@ def main():
     cmd_fetch = [
         "py", "-3.11-32",
         str(FETCH_DIR / "fetch_to_file.py"),
-        "--from", args.from_date,
+        "--from", from_date,
         "--output", str(out_file),
     ]
-    if args.no_odds:
+    if args.ra_se_hr_only:
+        cmd_fetch.append("--ra-se-hr-only")
+    elif args.no_odds:
         cmd_fetch.append("--no-odds")
     if args.limit:
         cmd_fetch.extend(["--limit", str(args.limit)])
@@ -54,7 +61,10 @@ def main():
     if args.setup:
         cmd_fetch.append("--setup")
 
-    print("[1/2] JV-Link 取得 (32bit)...", flush=True)
+    if args.ra_se_hr_only:
+        print(f"[1/2] JV-Link 取得 (32bit) - RA/SE/HR 全範囲 [{from_date}〜]...", flush=True)
+    else:
+        print("[1/2] JV-Link 取得 (32bit)...", flush=True)
     r1 = subprocess.run(cmd_fetch, cwd=str(ROOT))
     if r1.returncode != 0:
         print("[NG] fetch_to_file 失敗")
