@@ -78,6 +78,7 @@ def parse_o1(raw: str) -> list[dict] | None:
         odds = _num_or_none(odds_s)
         if odds is None or odds <= 0:
             continue
+        odds = round(odds / 10, 1)  # JV-Data: 小数点1桁付き（360→36.0倍）
         result.append({
             "race_id": race_id,
             "bet_type": "win",
@@ -103,6 +104,7 @@ def parse_o1(raw: str) -> list[dict] | None:
         odds = (low + high) / 2 if (low and high) else (low or high)
         if odds is None or odds <= 0:
             continue
+        odds = round(odds / 10, 1)  # JV-Data: 小数点1桁付き
         result.append({
             "race_id": race_id,
             "bet_type": "place",
@@ -129,6 +131,7 @@ def parse_o1(raw: str) -> list[dict] | None:
         odds = _num_or_none(odds_s)
         if odds is None or odds <= 0:
             continue
+        odds = round(odds / 10, 1)  # JV-Data: 小数点1桁付き（5桁→258.7倍）
         result.append({
             "race_id": race_id,
             "bet_type": "bracket",

@@ -82,6 +82,7 @@ def parse_o2(raw: str) -> list[dict] | None:
         odds = _num_or_none(odds_s)
         if odds is None or odds <= 0:
             continue
+        odds = round(odds / 10, 1)  # JV-Data: 小数点1桁付き（6桁）
         result.append({
             "race_id": race_id,
             "bet_type": "quinella",

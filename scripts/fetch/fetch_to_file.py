@@ -27,6 +27,7 @@ RECORD_TYPES_NO_ODDS = frozenset(["RA", "SE", "HR", "UM", "KS", "CH", "WH", "WE"
 RECORD_TYPES_O1 = frozenset(["O1"])
 RECORD_TYPES_O2 = frozenset(["O2"])
 RECORD_TYPES_O3 = frozenset(["O3"])
+RECORD_TYPES_O4 = frozenset(["O4"])
 # races / race_entries / payouts のみ（DIFN はスキップ）
 RECORD_TYPES_RA_SE_HR = frozenset(["RA", "SE", "HR"])
 # DIFF（蓄積情報）に含まれるマスタ。RACEには含まれない。
@@ -47,7 +48,7 @@ def extract_source_date(record_type: str, raw_text: str) -> str | None:
                 y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
                 if _valid(y, m, d):
                     return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
-        if record_type in ("UM", "KS", "CH", "JG", "O1", "O2", "O3") and len(raw_text) >= 12:
+        if record_type in ("UM", "KS", "CH", "JG", "O1", "O2", "O3", "O4") and len(raw_text) >= 12:
             s = raw_text[3:11]  # データ作成年月日 位置4-11
             if s.isdigit():
                 y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
@@ -91,6 +92,7 @@ def main():
     parser.add_argument("--odds-o1-only", action="store_true", help="O1（単複枠オッズ）のみ取得")
     parser.add_argument("--odds-o2-only", action="store_true", help="O2（馬連オッズ）のみ取得")
     parser.add_argument("--odds-o3-only", action="store_true", help="O3（ワイドオッズ）のみ取得")
+    parser.add_argument("--odds-o4-only", action="store_true", help="O4（馬単オッズ）のみ取得")
     args = parser.parse_args()
     if args.um_ks_only:
         args.diff_only = True
@@ -105,6 +107,8 @@ def main():
         target_types = RECORD_TYPES_O2
     elif args.odds_o3_only:
         target_types = RECORD_TYPES_O3
+    elif args.odds_o4_only:
+        target_types = RECORD_TYPES_O4
     else:
         target_types = RECORD_TYPES_NO_ODDS if args.no_odds else TARGET_RECORD_TYPES
 
@@ -128,13 +132,13 @@ def main():
             pass
     if not args.diff_only:
         # 3=セットアップ（全件）, 1=通常。O1/O2 全件取得は --setup 必須
-        race_option = 3 if (args.ra_se_hr_only or ((args.odds_o1_only or args.odds_o2_only or args.odds_o3_only) and args.setup)) else 1
+        race_option = 3 if (args.ra_se_hr_only or ((args.odds_o1_only or args.odds_o2_only or args.odds_o3_only or args.odds_o4_only) and args.setup)) else 1
         rc, dl_count, _ = client.open("RACE", from_time, option=race_option)
         if rc < 0:
             print(f"[NG] JVOpen(RACE) failed: rc={rc}")
             sys.exit(1)
 
-        label = "RA/SE/HR" if args.ra_se_hr_only else ("O1" if args.odds_o1_only else ("O2" if args.odds_o2_only else ("O3" if args.odds_o3_only else "RACE")))
+        label = "RA/SE/HR" if args.ra_se_hr_only else ("O1" if args.odds_o1_only else ("O2" if args.odds_o2_only else ("O3" if args.odds_o3_only else ("O4" if args.odds_o4_only else "RACE"))))
         if dl_count > 0:
             print(f"[{label}] 取得開始 (予定: {dl_count:,} 件)...", flush=True)
         else:
