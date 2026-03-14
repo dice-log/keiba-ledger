@@ -4,7 +4,7 @@ raw.jvdata → analytics 正規化
 
 processed=FALSE のレコードをパースして analytics テーブルに挿入し、processed=TRUE に更新。
 
-処理対象: RA→races, SE→race_entries, HR→payouts, O1/O2/O3/O4→odds_final, UM→horses, KS→jockeys, CH→trainers, JG→horse_exclusions
+処理対象: RA→races, SE→race_entries, HR→payouts, O1/O2/O3/O4/O5/O6→odds_final, UM→horses, KS→jockeys, CH→trainers, JG→horse_exclusions
 """
 
 import argparse
@@ -36,6 +36,8 @@ from parse_o1 import parse_o1
 from parse_o2 import parse_o2
 from parse_o3 import parse_o3
 from parse_o4 import parse_o4
+from parse_o5 import parse_o5
+from parse_o6 import parse_o6
 
 
 def get_db_config():
@@ -58,6 +60,8 @@ def main():
     parser.add_argument("--o2-only", action="store_true", help="O2（馬連オッズ）のみ正規化")
     parser.add_argument("--o3-only", action="store_true", help="O3（ワイドオッズ）のみ正規化")
     parser.add_argument("--o4-only", action="store_true", help="O4（馬単オッズ）のみ正規化")
+    parser.add_argument("--o5-only", action="store_true", help="O5（3連複オッズ）のみ正規化")
+    parser.add_argument("--o6-only", action="store_true", help="O6（3連単オッズ）のみ正規化")
     args = parser.parse_args()
 
     (ROOT / "logs").mkdir(exist_ok=True)
@@ -70,7 +74,7 @@ def main():
     cur.execute(
         """SELECT id, record_type, raw_text FROM raw.jvdata WHERE processed = FALSE
            ORDER BY
-             CASE record_type WHEN 'RA' THEN 1 WHEN 'SE' THEN 2 WHEN 'HR' THEN 3 WHEN 'O1' THEN 4 WHEN 'O2' THEN 5 WHEN 'O3' THEN 6 WHEN 'O4' THEN 7 WHEN 'UM' THEN 8 WHEN 'KS' THEN 9 WHEN 'CH' THEN 10 WHEN 'JG' THEN 11 ELSE 12 END,
+             CASE record_type WHEN 'RA' THEN 1 WHEN 'SE' THEN 2 WHEN 'HR' THEN 3 WHEN 'O1' THEN 4 WHEN 'O2' THEN 5 WHEN 'O3' THEN 6 WHEN 'O4' THEN 7 WHEN 'O5' THEN 8 WHEN 'O6' THEN 9 WHEN 'UM' THEN 10 WHEN 'KS' THEN 11 WHEN 'CH' THEN 12 WHEN 'JG' THEN 13 ELSE 14 END,
              CASE WHEN record_type = 'RA' AND SUBSTRING(COALESCE(raw_text,'') FROM 3 FOR 1) IN ('5','6','7') THEN 1 ELSE 0 END,
              CASE WHEN record_type = 'SE' AND SUBSTRING(COALESCE(raw_text,'') FROM 3 FOR 1) IN ('5','6','7') THEN 1 ELSE 0 END,
              id"""
@@ -88,13 +92,17 @@ def main():
         rows = [r for r in rows if r[1] == "O3"]
     if args.o4_only:
         rows = [r for r in rows if r[1] == "O4"]
+    if args.o5_only:
+        rows = [r for r in rows if r[1] == "O5"]
+    if args.o6_only:
+        rows = [r for r in rows if r[1] == "O6"]
     if args.limit:
         rows = rows[: args.limit]
 
     cur.execute("SELECT race_id FROM analytics.races")
     known_race_ids = {r[0] for r in cur.fetchall()}
 
-    stats = {"RA": 0, "SE": 0, "HR": 0, "O1": 0, "O2": 0, "O3": 0, "O4": 0, "UM": 0, "KS": 0, "CH": 0, "JG": 0, "skip": 0, "err": 0}
+    stats = {"RA": 0, "SE": 0, "HR": 0, "O1": 0, "O2": 0, "O3": 0, "O4": 0, "O5": 0, "O6": 0, "UM": 0, "KS": 0, "CH": 0, "JG": 0, "skip": 0, "err": 0}
     processed_ids = []
 
     for row_id, record_type, raw_text in rows:
@@ -285,6 +293,50 @@ def main():
                         )
                 if rows_o4:
                     stats["O4"] += 1
+                    processed_ids.append(row_id)
+                else:
+                    stats["skip"] += 1
+
+            elif record_type == "O5":
+                rows_o5 = parse_o5(raw_text)
+                if rows_o5:
+                    rows_o5 = [r for r in rows_o5 if r["race_id"] in known_race_ids]
+                if rows_o5 and not args.dry_run:
+                    for r in rows_o5:
+                        cur.execute(
+                            """
+                            INSERT INTO analytics.odds_final (race_id, bet_type, combination, odds, popularity)
+                            VALUES (%(race_id)s, %(bet_type)s, %(combination)s, %(odds)s, %(popularity)s)
+                            ON CONFLICT (race_id, bet_type, combination) DO UPDATE SET
+                                odds = EXCLUDED.odds,
+                                popularity = EXCLUDED.popularity
+                            """,
+                            r,
+                        )
+                if rows_o5:
+                    stats["O5"] += 1
+                    processed_ids.append(row_id)
+                else:
+                    stats["skip"] += 1
+
+            elif record_type == "O6":
+                rows_o6 = parse_o6(raw_text)
+                if rows_o6:
+                    rows_o6 = [r for r in rows_o6 if r["race_id"] in known_race_ids]
+                if rows_o6 and not args.dry_run:
+                    for r in rows_o6:
+                        cur.execute(
+                            """
+                            INSERT INTO analytics.odds_final (race_id, bet_type, combination, odds, popularity)
+                            VALUES (%(race_id)s, %(bet_type)s, %(combination)s, %(odds)s, %(popularity)s)
+                            ON CONFLICT (race_id, bet_type, combination) DO UPDATE SET
+                                odds = EXCLUDED.odds,
+                                popularity = EXCLUDED.popularity
+                            """,
+                            r,
+                        )
+                if rows_o6:
+                    stats["O6"] += 1
                     processed_ids.append(row_id)
                 else:
                     stats["skip"] += 1
