@@ -92,3 +92,59 @@ def parse_o2(raw: str) -> list[dict] | None:
         })
 
     return result if result else None
+
+
+def parse_o2_timeseries(raw: str) -> tuple[str, str, list[dict]] | None:
+    """
+    時系列オッズ用 O2 パース。0B42 のレコード向け。
+    返り値: (race_id, announce_mmddhhmm, rows)。
+    rows は bet_type, combination, odds のみ（analytics.odds_timeseries 用）。
+    データ区分 1,2,3,4,5 を対象とする。
+    """
+    try:
+        b = _to_bytes(raw)
+    except Exception:
+        return None
+    if len(b) < 2030:
+        return None
+
+    data_kbn = _sub_bytes(b, 3, 1)
+    if data_kbn not in ("1", "2", "3", "4", "5"):
+        return None
+
+    year = _sub_bytes(b, 12, 4)
+    mmdd = _sub_bytes(b, 16, 4)
+    venue_code = _sub_bytes(b, 20, 2)
+    kai = _sub_bytes(b, 22, 2)
+    nichi = _sub_bytes(b, 24, 2)
+    race_no = _sub_bytes(b, 26, 2)
+    if not (year and mmdd and venue_code and race_no):
+        return None
+
+    race_id = f"{year}{mmdd}{venue_code}{kai}{nichi}{race_no}"
+    announce = _sub_bytes(b, 28, 8)
+    if not announce or len(announce) != 8:
+        announce = ""
+
+    rows: list[dict] = []
+
+    for i in range(153):
+        base = 41 + i * 13
+        combo_raw = _sub_bytes(b, base, 4)
+        odds_s = _sub_bytes(b, base + 4, 6)
+        if not combo_raw or len(combo_raw) < 4:
+            continue
+        try:
+            a, b_val = int(combo_raw[:2]), int(combo_raw[2:4])
+            if a < 1 or b_val < 1 or a == b_val:
+                continue
+            combination = f"{min(a, b_val)}-{max(a, b_val)}"
+        except (ValueError, TypeError):
+            continue
+        odds = _num_or_none(odds_s)
+        if odds is None or odds <= 0:
+            continue
+        odds = round(odds / 10, 1)
+        rows.append({"bet_type": "quinella", "combination": combination, "odds": odds})
+
+    return (race_id, announce, rows) if rows else None

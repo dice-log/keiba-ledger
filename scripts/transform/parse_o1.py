@@ -141,3 +141,92 @@ def parse_o1(raw: str) -> list[dict] | None:
         })
 
     return result if result else None
+
+
+def parse_o1_timeseries(raw: str) -> tuple[str, str, list[dict]] | None:
+    """
+    時系列オッズ用 O1 パース。0B41 のレコード向け。
+    返り値: (race_id, announce_mmddhhmm, rows)。
+    rows は bet_type, combination, odds のみ（analytics.odds_timeseries 用）。
+    データ区分 1=中間, 2=前日, 3=最終, 4=確定, 5=確定(月曜) を対象とする。
+    """
+    try:
+        b = _to_bytes(raw)
+    except Exception:
+        return None
+    if len(b) < 610:
+        return None
+
+    data_kbn = _sub_bytes(b, 3, 1)
+    if data_kbn not in ("1", "2", "3", "4", "5"):
+        return None
+
+    year = _sub_bytes(b, 12, 4)
+    mmdd = _sub_bytes(b, 16, 4)
+    venue_code = _sub_bytes(b, 20, 2)
+    kai = _sub_bytes(b, 22, 2)
+    nichi = _sub_bytes(b, 24, 2)
+    race_no = _sub_bytes(b, 26, 2)
+    if not (year and mmdd and venue_code and race_no):
+        return None
+
+    race_id = f"{year}{mmdd}{venue_code}{kai}{nichi}{race_no}"
+    announce = _sub_bytes(b, 28, 8)  # 発表月日時分 MMDDhhmm
+    if not announce or len(announce) != 8:
+        announce = ""
+
+    rows: list[dict] = []
+
+    for i in range(28):
+        base = 44 + i * 8
+        uma = _sub_bytes(b, base, 2)
+        odds_s = _sub_bytes(b, base + 2, 4)
+        if not uma or uma == "  ":
+            continue
+        uma_int = _int_or_none(uma)
+        if uma_int is None or uma_int <= 0:
+            continue
+        odds = _num_or_none(odds_s)
+        if odds is None or odds <= 0:
+            continue
+        odds = round(odds / 10, 1)
+        rows.append({"bet_type": "win", "combination": str(uma_int), "odds": odds})
+
+    for i in range(28):
+        base = 268 + i * 12
+        uma = _sub_bytes(b, base, 2)
+        low_s = _sub_bytes(b, base + 2, 4)
+        high_s = _sub_bytes(b, base + 6, 4)
+        if not uma or uma == "  ":
+            continue
+        uma_int = _int_or_none(uma)
+        if uma_int is None or uma_int <= 0:
+            continue
+        low = _num_or_none(low_s)
+        high = _num_or_none(high_s)
+        odds = (low + high) / 2 if (low and high) else (low or high)
+        if odds is None or odds <= 0:
+            continue
+        odds = round(odds / 10, 1)
+        rows.append({"bet_type": "place", "combination": str(uma_int), "odds": odds})
+
+    for i in range(36):
+        base = 604 + i * 9
+        combo = _sub_bytes(b, base, 2)
+        odds_s = _sub_bytes(b, base + 2, 5)
+        if not combo or len(combo) < 2:
+            continue
+        try:
+            w1, w2 = int(combo[0]), int(combo[1])
+            if w1 < 1 or w1 > 8 or w2 < 1 or w2 > 8:
+                continue
+            combination = f"{min(w1, w2)}-{max(w1, w2)}"
+        except (ValueError, IndexError):
+            continue
+        odds = _num_or_none(odds_s)
+        if odds is None or odds <= 0:
+            continue
+        odds = round(odds / 10, 1)
+        rows.append({"bet_type": "bracket", "combination": combination, "odds": odds})
+
+    return (race_id, announce, rows) if rows else None

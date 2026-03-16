@@ -32,6 +32,16 @@ CREATE TABLE raw.fetch_log (
     finished_at         TIMESTAMPTZ
 );
 
+-- 時系列オッズ（0B41/0B42）の生データ。fetch_timeseries_o1_o2.py の JSONL を投入する。
+CREATE TABLE IF NOT EXISTS raw.odds_timeseries_raw (
+    id          BIGSERIAL PRIMARY KEY,
+    dataspec    TEXT NOT NULL,
+    record_type TEXT NOT NULL,
+    raw_text    TEXT NOT NULL,
+    loaded_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_odds_ts_raw_type ON raw.odds_timeseries_raw(dataspec, record_type);
+
 CREATE SCHEMA IF NOT EXISTS analytics;
 
 CREATE TABLE analytics.races (
