@@ -21,5 +21,8 @@ supabase>=2.0.0
 # ログ
 loguru>=0.7.0
 
+# ML (Phase 3 / C)
+lightgbm>=4.0.0
+
 # 仕様書変換（scripts/tools/excel_to_md.py）
 openpyxl>=3.0.0

@@ -17,8 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(SCRIPTS))
 
 from analysis.load_races import get_race_entries
-from analysis.probability import odds_to_market_probability
 from analysis.log_score import mean_log_score
+from analysis.odds_correction import compute_band_factors, apply_odds_correction
 from analysis.correction_b import (
     compute_jockey_factors,
     apply_jockey_correction,
@@ -48,7 +48,8 @@ def add_market_probability(df: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     parser = argparse.ArgumentParser(description="単勝ベースライン評価（ロジスコア）")
-    parser.add_argument("--mode", choices=["a", "b", "bj", "bt"], default="a", help="A=市場 / B=騎手×馬場 / Bj=騎手のみ / Bt=調教師のみ")
+    parser.add_argument("--mode", choices=["a", "a2", "b", "bj", "bt"], default="a",
+                        help="A=市場 / A2=オッズ補正 / B=騎手×馬場 / Bj=騎手のみ / Bt=調教師のみ")
     parser.add_argument("--train-from", default="2019-01-01", help="学習開始日 YYYY-MM-DD")
     parser.add_argument("--train-to", default="2022-12-31", help="学習終了日 YYYY-MM-DD")
     parser.add_argument("--val-from", default="2023-01-01", help="検証開始日 YYYY-MM-DD")
@@ -56,7 +57,7 @@ def main():
     parser.add_argument("--min-starts", type=int, default=30, help="B: 補正に使う最小出走数")
     args = parser.parse_args()
 
-    mode_labels = {"a": "A（市場）", "b": "B（騎手×馬場）", "bj": "Bj（騎手のみ）", "bt": "Bt（調教師のみ）"}
+    mode_labels = {"a": "A（市場）", "a2": "A2（オッズ補正）", "b": "B（騎手×馬場）", "bj": "Bj（騎手のみ）", "bt": "Bt（調教師のみ）"}
     print("検証期間:", args.val_from, "～", args.val_to)
     print("モード:", mode_labels[args.mode])
 
@@ -69,6 +70,12 @@ def main():
 
     if args.mode == "a":
         prob_col = "market_prob"
+    elif args.mode == "a2":
+        train_df = get_race_entries(args.train_from, args.train_to)
+        train_df = add_market_probability(train_df)
+        factors = compute_band_factors(train_df)
+        val_df = apply_odds_correction(val_df, factors)
+        prob_col = "corrected_prob"
     else:
         train_df = get_race_entries(args.train_from, args.train_to)
         if train_df.empty:
