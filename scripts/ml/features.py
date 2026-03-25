@@ -74,6 +74,21 @@ FEATURE_COLS_EXTRA = FEATURE_COLS_BASE + EXTRA_FEATURE_COLS + PAST_FEATURE_COLS
 FEATURE_COLS_BASE_NO_ODDS = [c for c in FEATURE_COLS_BASE if c not in ODDS_COLS]
 FEATURE_COLS_NO_ODDS = FEATURE_COLS_BASE_NO_ODDS + PAST_FEATURE_COLS
 
+# 時系列オッズ特徴量（analytics.odds_timeseries がある場合）
+# load_data.get_race_entries_ml(use_timeseries=True) で JOIN された列を使用
+TIMESERIES_FEATURE_COLS = [
+    "odds_ts_change_rate",  # (直前-公開)/公開。オッズ急騰・急落
+]
+
+
+def _ensure_timeseries_cols(out: pd.DataFrame) -> None:
+    """時系列オッズ系の列が無い場合にダミー（NaN→0）で埋める"""
+    for col in TIMESERIES_FEATURE_COLS:
+        if col not in out.columns:
+            out[col] = 0.0
+        else:
+            out[col] = out[col].fillna(0.0)
+
 
 def _ensure_past_cols(out: pd.DataFrame) -> None:
     """過去レース系の列が無い場合にダミーを追加"""
@@ -98,14 +113,18 @@ def build_features(
     df: pd.DataFrame,
     encoders: dict | None = None,
     use_past: bool = True,
+    use_timeseries: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
     """
     出走馬 DataFrame から特徴量を構築。
     use_past=False なら過去レース系は使わない（ベースライン用）。
+    use_timeseries=True なら時系列オッズ特徴量を含む（データがある場合）。
     """
     out = df.copy()
     if use_past:
         _ensure_past_cols(out)
+    if use_timeseries:
+        _ensure_timeseries_cols(out)
 
     out["implied_prob"] = 1.0 / out["win_odds"]
     out["popularity"] = out["popularity"].fillna(out["popularity"].max() + 1).astype(int)
@@ -155,12 +174,23 @@ def get_feature_matrix(
     use_past: bool = True,
     use_odds: bool = True,
     use_extra: bool = False,
+    use_timeseries: bool = False,
 ) -> tuple[pd.DataFrame, dict]:
-    """特徴量行列（DataFrame）とencodersを返す。use_extra=True で3.2追加特徴量を含む。"""
-    built, enc = build_features(df, encoders, use_past=use_past)
+    """特徴量行列とencodersを返す。use_extraで3.2追加、use_timeseriesで時系列オッズ特徴量を含む。"""
+    built, enc = build_features(
+        df, encoders, use_past=use_past, use_timeseries=use_timeseries
+    )
     if use_odds:
-        cols = (FEATURE_COLS_EXTRA if use_extra else FEATURE_COLS) if use_past else (FEATURE_COLS_BASE + EXTRA_FEATURE_COLS if use_extra else FEATURE_COLS_BASE)
+        cols = (
+            FEATURE_COLS_EXTRA if use_extra else FEATURE_COLS
+        ) if use_past else (
+            FEATURE_COLS_BASE + EXTRA_FEATURE_COLS if use_extra else FEATURE_COLS_BASE
+        )
     else:
-        base = FEATURE_COLS_BASE_NO_ODDS + (EXTRA_FEATURE_COLS_NO_ODDS if use_extra else [])
+        base = FEATURE_COLS_BASE_NO_ODDS + (
+            EXTRA_FEATURE_COLS_NO_ODDS if use_extra else []
+        )
         cols = base + (PAST_FEATURE_COLS if use_past else [])
+    if use_timeseries:
+        cols = list(cols) + [c for c in TIMESERIES_FEATURE_COLS if c in built.columns]
     return built[cols].astype(np.float32), enc

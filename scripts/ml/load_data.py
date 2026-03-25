@@ -23,6 +23,7 @@ try:
 except Exception:
     pass
 
+import numpy as np
 import pandas as pd
 import psycopg2
 
@@ -37,7 +38,57 @@ def get_db_config():
     }
 
 
-def get_race_entries_ml(from_date: str, to_date: str) -> pd.DataFrame:
+def get_win_odds_timeseries_summary(from_date: str, to_date: str) -> pd.DataFrame | None:
+    """
+    時系列オッズから単勝の「最初」「最後」オッズを集約。
+
+    analytics.odds_timeseries にデータがある場合のみ返す。
+    返り値: race_id, horse_number, odds_ts_first, odds_ts_last, odds_ts_change_rate
+    """
+    conn = psycopg2.connect(**get_db_config())
+    query = """
+        WITH first_odds AS (
+            SELECT DISTINCT ON (t.race_id, t.combination)
+                t.race_id, t.combination::int AS horse_number, t.odds AS odds_ts_first
+            FROM analytics.odds_timeseries t
+            JOIN analytics.races r ON r.race_id = t.race_id
+            WHERE t.bet_type = 'win' AND r.race_date BETWEEN %s AND %s
+              AND TRIM(t.combination) ~ '^[0-9]+$'
+            ORDER BY t.race_id, t.combination, t.recorded_at ASC
+        ),
+        last_odds AS (
+            SELECT DISTINCT ON (t.race_id, t.combination)
+                t.race_id, t.combination::int AS horse_number, t.odds AS odds_ts_last
+            FROM analytics.odds_timeseries t
+            JOIN analytics.races r ON r.race_id = t.race_id
+            WHERE t.bet_type = 'win' AND r.race_date BETWEEN %s AND %s
+              AND TRIM(t.combination) ~ '^[0-9]+$'
+            ORDER BY t.race_id, t.combination, t.recorded_at DESC
+        )
+        SELECT f.race_id, f.horse_number, f.odds_ts_first, l.odds_ts_last
+        FROM first_odds f
+        JOIN last_odds l ON f.race_id = l.race_id AND f.horse_number = l.horse_number
+    """
+    try:
+        df = pd.read_sql(
+            query, conn, params=(from_date, to_date, from_date, to_date)
+        )
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    if df.empty:
+        return None
+    df["odds_ts_change_rate"] = np.where(
+        df["odds_ts_first"] > 0,
+        (df["odds_ts_last"] - df["odds_ts_first"]) / df["odds_ts_first"],
+        np.nan,
+    )
+    return df
+
+
+def get_race_entries_ml(
+    from_date: str, to_date: str, use_timeseries: bool = False
+) -> pd.DataFrame:
     """
     ML用：指定期間のレース・出走馬データを取得。
 
@@ -82,4 +133,15 @@ def get_race_entries_ml(from_date: str, to_date: str) -> pd.DataFrame:
     """
     df = pd.read_sql(query, conn, params=(from_date, to_date))
     conn.close()
+
+    if use_timeseries:
+        ts = get_win_odds_timeseries_summary(from_date, to_date)
+        if ts is not None and not ts.empty:
+            df = df.merge(
+                ts,
+                on=["race_id", "horse_number"],
+                how="left",
+                suffixes=("", "_ts"),
+            )
+
     return df

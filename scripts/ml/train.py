@@ -63,19 +63,26 @@ def main():
     parser.add_argument("--no-past", action="store_true", help="過去レース特徴量を使わない（ベースライン確認用）")
     parser.add_argument("--no-odds", action="store_true", help="オッズ系特徴量を使わない（2.3）")
     parser.add_argument("--extra-features", action="store_true", help="3.2 追加特徴量（grade, odds_popularity_gap, distance_cat）")
+    parser.add_argument("--use-timeseries", action="store_true", help="時系列オッズ特徴量（odds_ts_change_rate）を含む")
     args = parser.parse_args()
 
     use_past = not args.no_past
     use_odds = not args.no_odds
     use_extra = args.extra_features
+    use_timeseries = args.use_timeseries
     print("学習期間:", args.train_from, "～", args.train_to)
     print("検証期間:", args.val_from, "～", args.val_to)
     print("過去レース:", "あり" if use_past else "なし（ベースライン）")
     print("オッズ系:", "あり" if use_odds else "なし（2.3）")
     print("追加特徴量:", "あり（3.2）" if use_extra else "なし")
+    print("時系列オッズ:", "あり" if use_timeseries else "なし")
 
-    train_df = get_race_entries_ml(args.train_from, args.train_to)
-    val_df = get_race_entries_ml(args.val_from, args.val_to)
+    train_df = get_race_entries_ml(
+        args.train_from, args.train_to, use_timeseries=use_timeseries
+    )
+    val_df = get_race_entries_ml(
+        args.val_from, args.val_to, use_timeseries=use_timeseries
+    )
     if train_df.empty or val_df.empty:
         print("[NG] データが不足しています")
         sys.exit(1)
@@ -89,10 +96,24 @@ def main():
         val_df = add_horse_past_stats(val_df, hist_from, hist_to)
         val_df = add_jockey_trainer_recent_stats(val_df, hist_from, hist_to, days=90)
 
-    X_train, encoders = get_feature_matrix(train_df, encoders=None, use_past=use_past, use_odds=use_odds, use_extra=use_extra)
+    X_train, encoders = get_feature_matrix(
+        train_df,
+        encoders=None,
+        use_past=use_past,
+        use_odds=use_odds,
+        use_extra=use_extra,
+        use_timeseries=use_timeseries,
+    )
     y_train = (train_df["finish_pos"] == 1).astype(int).values
 
-    X_val, _ = get_feature_matrix(val_df, encoders=encoders, use_past=use_past, use_odds=use_odds, use_extra=use_extra)
+    X_val, _ = get_feature_matrix(
+        val_df,
+        encoders=encoders,
+        use_past=use_past,
+        use_odds=use_odds,
+        use_extra=use_extra,
+        use_timeseries=use_timeseries,
+    )
     y_val = (val_df["finish_pos"] == 1).astype(int).values
     race_val = val_df["race_id"].values
 
@@ -130,6 +151,7 @@ def main():
     suffix = "（過去レースなし）" if not use_past else ""
     suffix += "（オッズなし）" if not use_odds else ""
     suffix += "（特徴量追加）" if use_extra else ""
+    suffix += "（時系列オッズ）" if use_timeseries else ""
     print(f"平均ロジスコア（C=LightGBM{suffix}）: {ls:.4f}")
 
     if args.model_out:
